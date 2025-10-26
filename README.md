@@ -48,8 +48,8 @@ This project implements an AI agent capable of collecting information from websi
 1. Clone the repository:
 
    ```bash
-   git clone [repository-url]
-   cd ialp-agent
+   git clone https://github.com/nehuenpereyra/web-agent
+   cd web-agent
    ```
 
 2. Install dependencies:
