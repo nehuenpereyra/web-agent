@@ -1,0 +1,13 @@
+output.txt 
+node_modules 
+dist 
+.mastra 
+.env.development 
+.env 
+*.db 
+*.db-* 
+
+src/scraping/data/cache
+src/scraping/data/html
+src/scraping/data/text
+src/scraping/data/csv

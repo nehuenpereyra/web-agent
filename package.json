@@ -1,0 +1,52 @@
+{
+  "name": "web-agent",
+  "author": "Pereyra Nehuen",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "license": "MIT",
+  "scripts": {
+    "dev": "mastra dev",
+    "build": "mastra build",
+    "start": "mastra start",
+    "ingest": "tsx src/ingest/index.ts",
+    "save:html": "tsx src/scraping/save/save-html.ts",
+    "save:text": "tsx src/scraping/save/save-text.ts",
+    "setup:ollama": "tsx src/config/ollama.ts"
+  },
+  "keywords": [],
+  "type": "module",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "dependencies": {
+    "@mastra/core": "^0.21.1",
+    "@mastra/libsql": "^0.15.2",
+    "@mastra/loggers": "^0.10.16",
+    "@mastra/memory": "^0.15.7",
+    "@mastra/pg": "^0.17.4",
+    "@mastra/rag": "^1.3.1",
+    "cheerio": "^1.1.2",
+    "dotenv": "^17.2.3",
+    "html-to-text": "^9.0.5",
+    "ollama": "^0.6.0",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.16.3",
+    "pino": "^10.1.0",
+    "uuid": "^13.0.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/cheerio": "^1.0.0",
+    "@types/html-to-text": "^9.0.4",
+    "@types/node": "^24.8.1",
+    "@types/pg": "^8.15.5",
+    "@types/puppeteer": "^7.0.4",
+    "@types/uuid": "^11.0.0",
+    "mastra": "^0.17.0",
+    "pino-pretty": "^13.1.2",
+    "puppeteer": "^24.25.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
