@@ -128,6 +128,11 @@ Save extracted text:
 pnpm save:text
 ```
 
+Prisma Migrate:
+
+```bash
+npx prisma migrate dev
+```
 
 ## License
 

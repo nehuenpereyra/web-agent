@@ -2,6 +2,7 @@ import * as puppeteer from "puppeteer";
 import { PDFParse } from "pdf-parse";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { logger } from "@/config/logger";
+import fs from "fs";
 
 export interface ScrapedPage {
   url: string;
@@ -150,6 +151,7 @@ export class DomainScraper {
     logger.info(`Total pages: ${htmlPages.length + pdfPages.length}`);
     logger.info(`Total PDFs : ${pdfPages.length}`);
     logger.info(`Total HTMLs : ${htmlPages.length}`);
+
 
     this.close();
     return this.results;

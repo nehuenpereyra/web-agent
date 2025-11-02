@@ -1,12 +1,12 @@
-import { v4 as uuidv4 } from "uuid";
-
 import { PgVector } from "@mastra/pg";
 import ollama from "ollama";
 
-import { Pool } from "pg";
 import { splitTextSmart } from "../utils/split-text-smart";
 import { envs } from "@/config/envs";
 import { logger } from "@/config/logger";
+import { prisma } from "@/prisma/client";
+import { Prisma } from "@/prisma/generated";
+import { generateChunkId } from "@/utils/generate-chunk-id";
 
 export interface Chunk {
   content: string;
@@ -33,18 +33,23 @@ export class RAGSectionProcessor {
       connectionString: envs.POSTGRES_CONNECTION_STRING,
     });
     this.indexName = "web_index";
-    this.modelName = envs.TEXT_EMBEDDING_MODEL_NAME; 
-    this.dimension = envs.TEXT_EMBEDDING_MODEL_DIM; 
+    this.modelName = envs.TEXT_EMBEDDING_MODEL_NAME;
+    this.dimension = envs.TEXT_EMBEDDING_MODEL_DIM;
   }
 
   public getChunks(): Chunk[] {
     return this.chunks;
   }
 
-  public addText(text: string, customMetadata: Record<string, any>) {
+  public addText(
+    text: string,
+    customMetadata: Record<string, any>,
+    documentId: string,
+    unique: string
+  ) {
     if (text.length > this.maxChunkSize) {
       const splitText = splitTextSmart(text, this.maxChunkSize);
-      const ids = Array.from({ length: splitText.length }, () => uuidv4());
+      const ids = splitText.map((value) => generateChunkId(value + unique));
       splitText.forEach((text, index) => {
         this.chunks.push({
           content: text,
@@ -53,6 +58,7 @@ export class RAGSectionProcessor {
             id: ids[index],
             chain: ids,
             text,
+            documentId,
           },
         });
       });
@@ -61,8 +67,9 @@ export class RAGSectionProcessor {
         content: text,
         metadata: {
           ...customMetadata,
-          id: uuidv4(),
+          id: generateChunkId(text),
           text,
+          documentId,
         },
       });
     }
@@ -90,29 +97,19 @@ export class RAGSectionProcessor {
 
     const processedIds: string[] = [];
 
-    const pool = new Pool({
-      host: "localhost",
-      port: 5433,
-      database: "vector_db",
-      user: "postgres",
-      password: "postgres",
-    });
-
     for (const result of resultsFilter) {
       const chain = result.metadata?.chain as string[];
       if (chain) {
         if (!processedIds.includes(result.metadata?.id)) {
           let text = "";
-          const result2 = await pool.query(
-            `
-            SELECT * FROM ${this.indexName} 
-            WHERE metadata->>'id' IN (${(chain ?? [])
-              .map((_, i) => `$${i + 1}`)
-              .join(", ")})
-          `,
-            chain ?? []
-          );
-          const parts = result2.rows.map((value) => value.metadata) as {
+
+          const result2: any[] = await prisma.$queryRaw`
+          SELECT id, metadata
+          FROM "web_index"
+          WHERE metadata->>'id' IN (${Prisma.join(chain)})
+          `;
+
+          const parts = result2.map((value) => value.metadata) as {
             id: string;
             url: string;
             text: string;
@@ -140,16 +137,20 @@ export class RAGSectionProcessor {
         });
       }
     }
-    await pool.end();
 
     return processed;
   }
   async generateEmbeddings() {
     const embeddings = [];
-    
+
     logger.info(`Text Embedding Model: ${this.modelName}`);
     logger.info(`Text Embedding Model Dimention: ${this.dimension}`);
     logger.info(`Total chunks: ${this.chunks.length}`);
+
+    if (this.chunks.length === 0) {
+      logger.info(`No chunks to generate embeddings`);
+      return;
+    }
 
     for (const chunk of this.chunks) {
       try {
@@ -174,5 +175,93 @@ export class RAGSectionProcessor {
       vectors: embeddings,
       metadata: this.chunks.map((chunk) => chunk.metadata),
     });
+  }
+  async syncChunks(documentId: string) {
+    const newChunkIds = this.chunks.map((t) => {
+      return {
+        id: t.metadata.id,
+        document_id: t.metadata.documentId,
+      };
+    });
+
+    /*
+    const seen = new Set<string>();
+    const duplicates: string[] = [];
+
+    for (const id of newChunkIds.map((t) => t.id)) {
+      if (seen.has(id)) {
+        duplicates.push(id);
+      } else {
+        seen.add(id);
+      }
+    }
+
+    console.log(`Total duplicados: ${duplicates.length}`);
+    console.log("Ejemplos de duplicados:", duplicates.slice(0, 20));
+    for (const id of duplicates) {
+      const chunk = this.chunks.filter((t) => t.metadata.id === id);
+      console.log(chunk);
+    }
+      */
+
+    // Se consulta solo los IDs existentes para este documento
+    const existing = await prisma.chunks.findMany({
+      where: { document_id: documentId },
+      select: { id: true },
+    });
+
+    const existingIds = new Set(existing.map((c) => c.id));
+
+    // Obtener array de IDs de nuevos chunks
+    const newChunkIdsArray = newChunkIds.map((t) => t.id);
+
+    // Calcular cuáles son nuevos y cuáles eliminar
+    const toInsert = newChunkIds.filter((chunk) => !existingIds.has(chunk.id));
+    const toDelete = Array.from(existingIds).filter(
+      (id) => !newChunkIdsArray.includes(id)
+    );
+
+    // Sincronización en la tabla de chunks
+    await prisma.$transaction([
+      ...(toInsert.length > 0
+        ? [
+            prisma.chunks.createMany({
+              data: toInsert,
+              skipDuplicates: true, // ← AÑADE ESTO para evitar errores de duplicados
+            }),
+          ]
+        : []),
+
+      ...(toDelete.length > 0
+        ? [
+            prisma.chunks.deleteMany({
+              where: {
+                document_id: documentId,
+                id: { in: toDelete },
+              },
+            }),
+          ]
+        : []),
+    ]);
+
+    // Sincronización en la tabla de vectores
+    for (const id of toDelete) {
+      await prisma.web_index.deleteMany({
+        where: {
+          metadata: {
+            path: ["id"],
+            equals: id,
+          },
+        },
+      });
+    }
+
+    // Crear un Set de IDs que se insertaron para filtrado eficiente
+    const insertedIds = new Set(toInsert.map((chunk) => chunk.id));
+    this.chunks = this.chunks.filter((t) => insertedIds.has(t.metadata.id));
+
+    logger.info(`Sincronizacion de Documento: ${documentId}`);
+    logger.info(`Nuevos Chunks: ${toInsert.length}`);
+    logger.info(`Eliminados/editados: ${toDelete.length}`);
   }
 }

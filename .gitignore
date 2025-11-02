@@ -11,3 +11,5 @@ src/scraping/data/cache
 src/scraping/data/html
 src/scraping/data/text
 src/scraping/data/csv
+/generated/prisma
+/prisma/generated

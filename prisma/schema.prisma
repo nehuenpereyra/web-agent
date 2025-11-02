@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "./generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model web_index {
+  id        Int                    @id @default(autoincrement())
+  vector_id String                 @unique
+  embedding Unsupported("vector")?
+  metadata  Json?                  @default("{}")
+
+  @@index([embedding], map: "web_index_vector_idx")
+}
+
+model chunks {
+  id          String   @id
+  document_id  String 
+  @@index([document_id])
+}

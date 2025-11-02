@@ -21,13 +21,16 @@ const main = async () => {
       ragSectionProcessor.addText(chunk, {
         url: page.url,
         tag: slugToTitle(page.url),
-      });
+      }, 'https://ialp.fcaglp.unlp.edu.ar', slugToTitle(page.url));
     }
   }
 
+  await ragSectionProcessor.syncChunks('https://ialp.fcaglp.unlp.edu.ar')
+
   await ragSectionProcessor.generateEmbeddings();
 
-  if(envs.GENERATE_CSV_CHUNKS)
+  if(envs.GENERATE_CSV_CHUNKS && ragSectionProcessor
+      .getChunks().length > 0)
   generateCsv(
     ragSectionProcessor
       .getChunks()
