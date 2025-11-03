@@ -13,3 +13,4 @@ src/scraping/data/text
 src/scraping/data/csv
 
 /prisma/generated
+pgdata
