@@ -55,18 +55,20 @@ This project implements an AI agent capable of collecting information from websi
 2. Install dependencies:
    ```bash
    pnpm install
+   npx puppeteer browsers install chrome
    ```
 3. Start the PostgreSQL database using Docker (optional):
 
    ```bash
    docker run -d \
-   --name postgres-vector \
-   -e POSTGRES_DB=vector_db \
-   -e POSTGRES_USER=postgres  \
-   -e POSTGRES_PASSWORD=postgres \
-   -e POSTGRES_HOST_AUTH_METHOD=trust \
-   -p 5433:5432 \
-   pgvector/pgvector:pg16
+  --name postgres-vector \
+  -e POSTGRES_DB=vector_db \
+  -e POSTGRES_USER=postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_HOST_AUTH_METHOD=trust \
+  -p 5433:5432 \
+  -v "$(pwd -W)/pgdata:/var/lib/postgresql/data" \
+  pgvector/pgvector:pg16
    ```
 
 4. Set up environment variables:

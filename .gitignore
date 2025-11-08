@@ -15,3 +15,6 @@ src/scraping/data/csv
 /prisma/generated
 
 .venv
+
+/prisma/generated
+pgdata

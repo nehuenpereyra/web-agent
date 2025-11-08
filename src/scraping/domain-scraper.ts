@@ -3,6 +3,7 @@ import { PDFParse } from "pdf-parse";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { logger } from "@/config/logger";
 import fs from "fs";
+import path from "path";
 
 export interface ScrapedPage {
   url: string;
@@ -131,16 +132,22 @@ export class DomainScraper {
 
   async scrapeDomain(baseUrl: string, maxDepth: number = 2) {
     if (!this.browser) await this.initialize();
-    const cachePath = "./src/scraping/data/cache/web.json";
 
-    if (!this.useCache || !existsSync(cachePath)) {
+    const basePath = "./src/scraping";
+    const cacheDir = path.join(basePath, "data", "cache");
+
+    if (!fs.existsSync(cacheDir)) {
+      fs.mkdirSync(cacheDir, { recursive: true });
+    }
+
+    const cacheFile = path.join(cacheDir, "web.json");
+
+    if (!this.useCache || !existsSync(cacheFile)) {
       await this.scrapePage(baseUrl, 0, maxDepth, new URL(baseUrl).hostname);
-      if (!fs.existsSync(cachePath)) {
-        fs.mkdirSync(cachePath);
-      }
-      writeFileSync(cachePath, JSON.stringify(this.results, null, 2));
+
+      writeFileSync(cacheFile, JSON.stringify(this.results, null, 2));
     } else {
-      const results = JSON.parse(readFileSync(cachePath, "utf-8"));
+      const results = JSON.parse(readFileSync(cacheFile, "utf-8"));
       this.results = results as ScrapedPage[];
       logger.info(`Using web page cache`);
     }
