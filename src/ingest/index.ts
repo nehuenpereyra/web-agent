@@ -16,16 +16,13 @@ const main = async () => {
   const ragSectionProcessor = new RAGSectionProcessor(250);
 
   for (const page of scraper.getHtmlPages()) {
-    const chunks = splitByArticles(page.html);
-    for (const chunk of chunks) {
-      ragSectionProcessor.addText(chunk, {
-        url: page.url,
-        tag: slugToTitle(page.url),
-      }, 'https://ialp.fcaglp.unlp.edu.ar', slugToTitle(page.url));
+    const segments = splitByArticles(page.html);
+    for (const segment of segments) {
+      await ragSectionProcessor.addSegment(segment, 'ialp_web', [slugToTitle(page.url)]);
     }
   }
 
-  await ragSectionProcessor.syncChunks('https://ialp.fcaglp.unlp.edu.ar')
+  await ragSectionProcessor.syncSegment('ialp_web')
 
   await ragSectionProcessor.generateEmbeddings();
 
@@ -36,6 +33,7 @@ const main = async () => {
       .getChunks()
       .map((value) => ({ ...value.metadata, text: value.content }))
   );
+  
 };
 
 main();

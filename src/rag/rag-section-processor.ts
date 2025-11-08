@@ -5,8 +5,8 @@ import { splitTextSmart } from "../utils/split-text-smart";
 import { envs } from "@/config/envs";
 import { logger } from "@/config/logger";
 import { prisma } from "@/prisma/client";
-import { Prisma } from "@/prisma/generated";
-import { generateChunkId } from "@/utils/generate-chunk-id";
+import { generateId } from "@/utils/generate-chunk-id";
+import { v4 as uuidv4 } from 'uuid'
 
 export interface Chunk {
   content: string;
@@ -15,7 +15,15 @@ export interface Chunk {
 export interface IProcessed {
   text: string;
   score: number;
-  url: string;
+}
+
+interface Segment {
+  id: string;
+  content: string;
+  chunks_id: string[];
+  node_set: string[];
+  dataset_name: string;
+  chunks: { content: string, metadata: { id: string, dataset_name: string, node_set: string[] } }[];
 }
 
 export class RAGSectionProcessor {
@@ -25,10 +33,14 @@ export class RAGSectionProcessor {
   private indexName: string;
   private modelName: string;
   private dimension: number;
+  private segments: Segment[];
+  private segmentIds: Set<string>;
 
   constructor(maxChunkSize: number = 1000) {
     this.maxChunkSize = maxChunkSize;
     this.chunks = [];
+    this.segments = [];
+    this.segmentIds = new Set<string>();
     this.store = new PgVector({
       connectionString: envs.POSTGRES_CONNECTION_STRING,
     });
@@ -41,38 +53,121 @@ export class RAGSectionProcessor {
     return this.chunks;
   }
 
-  public addText(
-    text: string,
-    customMetadata: Record<string, any>,
-    documentId: string,
-    unique: string
+  public async addSegment(
+    content: string,
+    datasetName: string,
+    nodeSet: string[]
   ) {
-    if (text.length > this.maxChunkSize) {
-      const splitText = splitTextSmart(text, this.maxChunkSize);
-      const ids = splitText.map((value) => generateChunkId(value + unique));
+    const id = generateId(content)
+    // si el segmento ya fue agregado, no lo agregamos de nuevo
+    if (this.segmentIds.has(id)) return;
+    this.segmentIds.add(id);
+
+    const chunks: { id: string, chain: string[], content: string }[] = []
+
+    if (content.length > this.maxChunkSize) {
+      const splitText = splitTextSmart(content, this.maxChunkSize);
+      const ids = splitText.map(() => uuidv4());
       splitText.forEach((text, index) => {
-        this.chunks.push({
+        chunks.push({
+          id: ids[index],
+          chain: ids,
           content: text,
-          metadata: {
-            ...customMetadata,
-            id: ids[index],
-            chain: ids,
-            text,
-            documentId,
-          },
         });
       });
     } else {
-      this.chunks.push({
-        content: text,
+      chunks.push({
+        id: uuidv4(),
+        chain: [],
+        content,
+      });
+    }
+
+    this.segments.push({
+      id,
+      content,
+      chunks_id: chunks.length === 1 ? [chunks[0].id] : chunks.flatMap((c) => c.chain),
+      node_set: nodeSet,
+      dataset_name: datasetName,
+      chunks: chunks.map((chunk) => ({
+        content: chunk.content,
         metadata: {
-          ...customMetadata,
-          id: generateChunkId(text),
-          text,
-          documentId,
+          id: chunk.id,
+          dataset_name: datasetName,
+          node_set: nodeSet
+        },
+      })),
+    });
+  }
+
+  public async syncSegment(
+    datasetName: string,
+  ) {
+    const currentBatch = Date.now().toString()
+
+    for (const segment of this.segments) {
+      const id = generateId(segment.content)
+      await prisma.segment.upsert({
+        where: { id },
+        update: { updated_at: new Date(), batch: currentBatch },
+        create: {
+          id: segment.id,
+          content: segment.content,
+          chunks_id: segment.chunks_id,
+          node_set: segment.node_set,
+          dataset_name: segment.dataset_name,
+          batch: currentBatch
+        }
+      });
+      for (const chunk of segment.chunks) {
+        this.chunks.push({
+          content: chunk.content,
+          metadata: {
+            id: chunk.metadata.id,
+            dataset_name: chunk.metadata.dataset_name,
+            node_set: chunk.metadata.node_set
+          },
+        });
+      }
+    }
+
+    // Sincronización en la tabla de vectores
+    const oldSegments = await prisma.segment.findMany({
+      where: {
+        dataset_name: datasetName,
+        batch: { not: currentBatch },
+      },
+      select: { chunks_id: true },
+    });
+
+    if (oldSegments.length === 0) {
+      console.log('🟢 No hay segmentos antiguos para eliminar.');
+      return;
+    }
+
+    const toDelete = oldSegments.flatMap(s => s.chunks_id);
+
+    console.log(`🟠 Se eliminarán ${toDelete.length} chunks de ${oldSegments.length} segmentos antiguos.`);
+
+    for (const id of toDelete) {
+      await prisma.web_index.deleteMany({
+        where: {
+          metadata: {
+            path: ["id"],
+            equals: id,
+          },
         },
       });
     }
+
+    console.log(`🟠 Se eliminarán ${oldSegments.length} segmentos antiguos.`);
+
+    await prisma.segment.deleteMany({
+      where: {
+        dataset_name: datasetName,
+        batch: { not: currentBatch },
+      },
+    });
   }
   async getResults({
     query,
@@ -91,54 +186,37 @@ export class RAGSectionProcessor {
       queryVector: queryEmbedding.embedding,
       topK: 20,
     });
-
-    const processed: IProcessed[] = [];
+    console.log('results:', results);
     const resultsFilter = results.filter((value) => value.score >= minScore);
 
-    const processedIds: string[] = [];
 
-    for (const result of resultsFilter) {
-      const chain = result.metadata?.chain as string[];
-      if (chain) {
-        if (!processedIds.includes(result.metadata?.id)) {
-          let text = "";
+    const ids = resultsFilter.map(result => result.metadata?.id);
+    const scoreDict = Object.fromEntries(resultsFilter.map(({ metadata, score }) => [metadata?.id, score]));
+    console.log('Retrieved IDs:', ids);
+    console.log('Score Dictionary:', scoreDict);
+    const segments = await prisma.segment.findMany({
+      where: {
+        chunks_id: {
+          hasSome: ids,
+        },
+      },
+      distinct: ["id"],
+    });
 
-          const result2: any[] = await prisma.$queryRaw`
-          SELECT id, metadata
-          FROM "web_index"
-          WHERE metadata->>'id' IN (${Prisma.join(chain)})
-          `;
+    console.log('Matched Segments:', segments.length);
 
-          const parts = result2.map((value) => value.metadata) as {
-            id: string;
-            url: string;
-            text: string;
-            chain: string[];
-          }[];
+    const segmentResults = segments.map(segment => {
+      const maxScore = Math.max(
+        ...segment.chunks_id.map(chunkId => scoreDict[chunkId] ?? 0)
+      );
+      return { text: segment.content, score: maxScore };
+    })
 
-          for (const uuid of chain) {
-            const part = parts.find((part) => part?.id === uuid);
-            if (part) {
-              text += ` ` + part?.text;
-            }
-            processedIds.push(uuid);
-          }
-          processed.push({
-            url: result.metadata?.url,
-            score: result.score,
-            text,
-          });
-        }
-      } else {
-        processed.push({
-          url: result.metadata?.url,
-          score: result.score,
-          text: result.metadata?.text,
-        });
-      }
-    }
+    const sortSegmentResults = segmentResults.sort((a, b) => b.score - a.score);
 
-    return processed;
+    console.log('Segment Results:', sortSegmentResults.length);
+
+    return sortSegmentResults;
   }
   async generateEmbeddings() {
     const embeddings = [];
@@ -176,92 +254,5 @@ export class RAGSectionProcessor {
       metadata: this.chunks.map((chunk) => chunk.metadata),
     });
   }
-  async syncChunks(documentId: string) {
-    const newChunkIds = this.chunks.map((t) => {
-      return {
-        id: t.metadata.id,
-        document_id: t.metadata.documentId,
-      };
-    });
 
-    /*
-    const seen = new Set<string>();
-    const duplicates: string[] = [];
-
-    for (const id of newChunkIds.map((t) => t.id)) {
-      if (seen.has(id)) {
-        duplicates.push(id);
-      } else {
-        seen.add(id);
-      }
-    }
-
-    console.log(`Total duplicados: ${duplicates.length}`);
-    console.log("Ejemplos de duplicados:", duplicates.slice(0, 20));
-    for (const id of duplicates) {
-      const chunk = this.chunks.filter((t) => t.metadata.id === id);
-      console.log(chunk);
-    }
-      */
-
-    // Se consulta solo los IDs existentes para este documento
-    const existing = await prisma.chunks.findMany({
-      where: { document_id: documentId },
-      select: { id: true },
-    });
-
-    const existingIds = new Set(existing.map((c) => c.id));
-
-    // Obtener array de IDs de nuevos chunks
-    const newChunkIdsArray = newChunkIds.map((t) => t.id);
-
-    // Calcular cuáles son nuevos y cuáles eliminar
-    const toInsert = newChunkIds.filter((chunk) => !existingIds.has(chunk.id));
-    const toDelete = Array.from(existingIds).filter(
-      (id) => !newChunkIdsArray.includes(id)
-    );
-
-    // Sincronización en la tabla de chunks
-    await prisma.$transaction([
-      ...(toInsert.length > 0
-        ? [
-            prisma.chunks.createMany({
-              data: toInsert,
-              skipDuplicates: true, // ← AÑADE ESTO para evitar errores de duplicados
-            }),
-          ]
-        : []),
-
-      ...(toDelete.length > 0
-        ? [
-            prisma.chunks.deleteMany({
-              where: {
-                document_id: documentId,
-                id: { in: toDelete },
-              },
-            }),
-          ]
-        : []),
-    ]);
-
-    // Sincronización en la tabla de vectores
-    for (const id of toDelete) {
-      await prisma.web_index.deleteMany({
-        where: {
-          metadata: {
-            path: ["id"],
-            equals: id,
-          },
-        },
-      });
-    }
-
-    // Crear un Set de IDs que se insertaron para filtrado eficiente
-    const insertedIds = new Set(toInsert.map((chunk) => chunk.id));
-    this.chunks = this.chunks.filter((t) => insertedIds.has(t.metadata.id));
-
-    logger.info(`Sincronizacion de Documento: ${documentId}`);
-    logger.info(`Nuevos Chunks: ${toInsert.length}`);
-    logger.info(`Eliminados/editados: ${toDelete.length}`);
-  }
 }

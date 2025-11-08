@@ -12,7 +12,6 @@ export const webTool = createTool({
     results: z.array(
       z.object({
         text: z.string(),
-        url: z.string(),
         score: z.number(),
       })
     ),

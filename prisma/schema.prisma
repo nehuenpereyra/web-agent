@@ -17,8 +17,13 @@ model web_index {
   @@index([embedding], map: "web_index_vector_idx")
 }
 
-model chunks {
+model segment {
   id          String   @id
-  document_id  String 
-  @@index([document_id])
+  content     String
+  chunks_id   String[]
+  node_set    String[]
+  dataset_name String
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  batch String
 }
