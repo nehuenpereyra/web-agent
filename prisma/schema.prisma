@@ -20,10 +20,29 @@ model web_index {
 model segment {
   id          String   @id
   content     String
-  chunks_id   String[]
   node_set    String[]
   dataset_name String
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
   batch String
+  chunks      chunk[]
+}
+
+model chunk {
+  id          String   @id
+  content     String
+  segment_id  String
+  segment     segment  @relation(fields: [segment_id], references: [id], onDelete: Cascade)
+}
+
+enum batch_status {
+  completed
+  failed
+  processing
+}
+
+model batch {
+  id          String   @id
+  status    batch_status  @default(processing)  
+  created_at   DateTime @default(now())
 }

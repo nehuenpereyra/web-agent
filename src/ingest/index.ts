@@ -14,6 +14,7 @@ const main = async () => {
   );
 
   const ragSectionProcessor = new RAGSectionProcessor(250);
+  await ragSectionProcessor.initialize()
 
   for (const page of scraper.getHtmlPages()) {
     const segments = splitByArticles(page.html);
@@ -22,9 +23,8 @@ const main = async () => {
     }
   }
 
-  await ragSectionProcessor.syncSegment('ialp_web')
-
-  await ragSectionProcessor.generateEmbeddings();
+  await ragSectionProcessor.clearSegments('ialp_web');
+  await ragSectionProcessor.info();
 
   if(envs.GENERATE_CSV_CHUNKS && ragSectionProcessor
       .getChunks().length > 0)
@@ -33,6 +33,7 @@ const main = async () => {
       .getChunks()
       .map((value) => ({ ...value.metadata, text: value.content }))
   );
+  
   
 };
 

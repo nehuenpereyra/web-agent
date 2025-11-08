@@ -7,6 +7,7 @@ import { logger } from "@/config/logger";
 import { prisma } from "@/prisma/client";
 import { generateId } from "@/utils/generate-chunk-id";
 import { v4 as uuidv4 } from 'uuid'
+import { batch } from "@/prisma/generated";
 
 export interface Chunk {
   content: string;
@@ -33,14 +34,13 @@ export class RAGSectionProcessor {
   private indexName: string;
   private modelName: string;
   private dimension: number;
-  private segments: Segment[];
-  private segmentIds: Set<string>;
+  public segments: Segment[];
+  private currentBatch: batch = { id: uuidv4(), status: 'processing', created_at: new Date() };
 
   constructor(maxChunkSize: number = 1000) {
     this.maxChunkSize = maxChunkSize;
     this.chunks = [];
     this.segments = [];
-    this.segmentIds = new Set<string>();
     this.store = new PgVector({
       connectionString: envs.POSTGRES_CONNECTION_STRING,
     });
@@ -53,99 +53,140 @@ export class RAGSectionProcessor {
     return this.chunks;
   }
 
+  public async initialize() {
+    let batch = await prisma.batch.findFirst({
+      orderBy: { created_at: 'desc' }
+    });
+
+    if (!batch || batch.status === 'completed') {
+      batch = await prisma.batch.create({
+        data: {
+          id: uuidv4(),
+          status: 'processing'
+        }
+      });
+    }
+    this.currentBatch = batch;
+
+    await this.store.createIndex({
+      indexName: this.indexName,
+      dimension: this.dimension,
+    });
+  }
+
   public async addSegment(
     content: string,
     datasetName: string,
     nodeSet: string[]
   ) {
     const id = generateId(content)
-    // si el segmento ya fue agregado, no lo agregamos de nuevo
-    if (this.segmentIds.has(id)) return;
-    this.segmentIds.add(id);
-
-    const chunks: { id: string, chain: string[], content: string }[] = []
-
-    if (content.length > this.maxChunkSize) {
-      const splitText = splitTextSmart(content, this.maxChunkSize);
-      const ids = splitText.map(() => uuidv4());
-      splitText.forEach((text, index) => {
-        chunks.push({
-          id: ids[index],
-          chain: ids,
-          content: text,
-        });
+    const existingSegment = await prisma.segment.findUnique({
+      where: { id },
+    });
+    if (existingSegment) {
+      await prisma.segment.update({
+        where: { id },
+        data: {
+          updated_at: new Date(),
+          batch: this.currentBatch.id
+        }
       });
     } else {
-      chunks.push({
-        id: uuidv4(),
-        chain: [],
-        content,
-      });
-    }
 
-    this.segments.push({
-      id,
-      content,
-      chunks_id: chunks.length === 1 ? [chunks[0].id] : chunks.flatMap((c) => c.chain),
-      node_set: nodeSet,
-      dataset_name: datasetName,
-      chunks: chunks.map((chunk) => ({
-        content: chunk.content,
-        metadata: {
+      const chunks: { id: string, chain: string[], content: string }[] = []
+
+      if (content.length > this.maxChunkSize) {
+        const splitText = splitTextSmart(content, this.maxChunkSize);
+        const ids = splitText.map(() => uuidv4());
+        splitText.forEach((text, index) => {
+          chunks.push({
+            id: ids[index],
+            chain: ids,
+            content: text,
+          });
+        });
+      } else {
+        chunks.push({
+          id: uuidv4(),
+          chain: [],
+          content,
+        });
+      }
+
+      await prisma.segment.create({
+        //   where: { id },
+        //   update: { updated_at: new Date(), batch: this.currentBatch.id },
+        data: {
+          id,
+          content: content,
+          chunks: {
+            create: chunks.map((chunk) => ({
+              id: chunk.id,
+              content: chunk.content
+            })),
+          },
+          node_set: nodeSet,
+          dataset_name: datasetName,
+          batch: this.currentBatch.id
+        }
+      });
+
+      const embeddings = [];
+      for (const chunk of chunks) {
+        try {
+          const response = await ollama.embeddings({
+            model: this.modelName,
+            prompt: chunk.content,
+          });
+          embeddings.push(response.embedding);
+        } catch (error) {
+          console.error(`Error generating embedding for chunk: ${error}`);
+          throw error;
+        }
+      }
+
+      const metadata = chunks.map((chunk) => {
+        return {
           id: chunk.id,
           dataset_name: datasetName,
           node_set: nodeSet
-        },
-      })),
-    });
+        }
+      })
+
+      await this.store.upsert({
+        indexName: this.indexName,
+        vectors: embeddings,
+        metadata
+      });
+    }
   }
 
-  public async syncSegment(
+  public async clearSegments(
     datasetName: string,
   ) {
-    const currentBatch = Date.now().toString()
 
-    for (const segment of this.segments) {
-      const id = generateId(segment.content)
-      await prisma.segment.upsert({
-        where: { id },
-        update: { updated_at: new Date(), batch: currentBatch },
-        create: {
-          id: segment.id,
-          content: segment.content,
-          chunks_id: segment.chunks_id,
-          node_set: segment.node_set,
-          dataset_name: segment.dataset_name,
-          batch: currentBatch
-        }
-      });
-      for (const chunk of segment.chunks) {
-        this.chunks.push({
-          content: chunk.content,
-          metadata: {
-            id: chunk.metadata.id,
-            dataset_name: chunk.metadata.dataset_name,
-            node_set: chunk.metadata.node_set
-          },
-        });
-      }
-    }
-
-    // Sincronización en la tabla de vectores
     const oldSegments = await prisma.segment.findMany({
       where: {
         dataset_name: datasetName,
-        batch: { not: currentBatch },
+        batch: { not: this.currentBatch.id },
       },
-      select: { chunks_id: true },
+      include: {
+        chunks: true
+      }
     });
 
     if (oldSegments.length === 0) {
       console.log('🟢 No hay segmentos antiguos para eliminar.');
+      await prisma.batch.update({
+        where: { id: this.currentBatch.id },
+        data: {
+          status: 'completed'
+        }
+      });
       return;
     }
 
-    const toDelete = oldSegments.flatMap(s => s.chunks_id);
+    const toDelete = oldSegments.flatMap(s => s.chunks.map(c => c.id));
 
     console.log(`🟠 Se eliminarán ${toDelete.length} chunks de ${oldSegments.length} segmentos antiguos.`);
 
@@ -165,9 +206,17 @@ export class RAGSectionProcessor {
     await prisma.segment.deleteMany({
       where: {
         dataset_name: datasetName,
-        batch: { not: currentBatch },
+        batch: { not: this.currentBatch.id },
       },
     });
+
+    await prisma.batch.update({
+      where: { id: this.currentBatch.id },
+      data: {
+        status: 'completed'
+      }
+    });
+    logger.info(`Segmentos antiguos eliminados correctamente.`);
   }
   async getResults({
     query,
@@ -186,73 +235,42 @@ export class RAGSectionProcessor {
       queryVector: queryEmbedding.embedding,
       topK: 20,
     });
-    console.log('results:', results);
+
     const resultsFilter = results.filter((value) => value.score >= minScore);
-
-
     const ids = resultsFilter.map(result => result.metadata?.id);
     const scoreDict = Object.fromEntries(resultsFilter.map(({ metadata, score }) => [metadata?.id, score]));
-    console.log('Retrieved IDs:', ids);
-    console.log('Score Dictionary:', scoreDict);
+
     const segments = await prisma.segment.findMany({
       where: {
-        chunks_id: {
-          hasSome: ids,
-        },
+        chunks: {
+          some: {
+            id: { in: ids }
+          }
+        }
       },
-      distinct: ["id"],
+      include: {
+        chunks: true
+      },
+      distinct: ['id']
     });
-
-    console.log('Matched Segments:', segments.length);
 
     const segmentResults = segments.map(segment => {
       const maxScore = Math.max(
-        ...segment.chunks_id.map(chunkId => scoreDict[chunkId] ?? 0)
+        ...segment.chunks.map(chunk => scoreDict[chunk.id] ?? 0)
       );
       return { text: segment.content, score: maxScore };
     })
 
     const sortSegmentResults = segmentResults.sort((a, b) => b.score - a.score);
 
-    console.log('Segment Results:', sortSegmentResults.length);
-
     return sortSegmentResults;
   }
-  async generateEmbeddings() {
-    const embeddings = [];
-
-    logger.info(`Text Embedding Model: ${this.modelName}`);
-    logger.info(`Text Embedding Model Dimention: ${this.dimension}`);
-    logger.info(`Total chunks: ${this.chunks.length}`);
-
-    if (this.chunks.length === 0) {
-      logger.info(`No chunks to generate embeddings`);
-      return;
-    }
-
-    for (const chunk of this.chunks) {
-      try {
-        const response = await ollama.embeddings({
-          model: this.modelName,
-          prompt: chunk.content,
-        });
-        embeddings.push(response.embedding);
-      } catch (error) {
-        console.error(`Error generating embedding for chunk: ${error}`);
-        throw error;
-      }
-    }
-
-    await this.store.createIndex({
-      indexName: this.indexName,
-      dimension: this.dimension,
-    });
-
-    await this.store.upsert({
-      indexName: this.indexName,
-      vectors: embeddings,
-      metadata: this.chunks.map((chunk) => chunk.metadata),
-    });
+  async info() {
+    logger.info(`Text embedding model: ${this.modelName}`);
+    logger.info(`Text embedding model dimension: ${this.dimension}`);
+    logger.info(`Total segments: ${await prisma.segment.count()}`);
+    logger.info(`Total chunks: ${await prisma.chunk.count()}`);
+    logger.info(`Using batch ID: ${this.currentBatch.id}`);
   }
 
 }
