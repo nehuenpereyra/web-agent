@@ -17,16 +17,26 @@ model web_index {
   @@index([embedding], map: "web_index_vector_idx")
 }
 
+model document {
+  id          String     @id @default(uuid())
+  name       String      @unique
+  node_set    String[]
+  dataset_name String
+  created_at  DateTime   @default(now())
+  updated_at  DateTime   @updatedAt
+  segments    segment[]
+}
+
 model segment {
   id          String   @id
   content     String
-  node_set    String[]
-  dataset_name String
+  batch String
   created_at   DateTime @default(now())
   updated_at   DateTime @updatedAt
-  batch String
   chunks      chunk[]
   categories  category[]
+  document_id  String
+  document     document   @relation(fields: [document_id], references: [id], onDelete: Cascade)
 }
 
 model chunk {

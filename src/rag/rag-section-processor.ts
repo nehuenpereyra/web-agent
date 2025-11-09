@@ -8,11 +8,8 @@ import { prisma } from "@/prisma/client";
 import { generateId } from "@/utils/generate-chunk-id";
 import { v4 as uuidv4 } from 'uuid'
 import { batch } from "@/prisma/generated";
+import { splitByArticles } from "@/scraping/formatters/html-formatter";
 
-export interface Chunk {
-  content: string;
-  metadata: Record<string, any>;
-}
 export interface IProcessed {
   text: string;
   score: number;
@@ -29,7 +26,6 @@ interface Segment {
 
 export class RAGSectionProcessor {
   private maxChunkSize: number;
-  private chunks: Chunk[];
   private store: PgVector;
   private indexName: string;
   private modelName: string;
@@ -39,7 +35,6 @@ export class RAGSectionProcessor {
 
   constructor(maxChunkSize: number = 1000) {
     this.maxChunkSize = maxChunkSize;
-    this.chunks = [];
     this.segments = [];
     this.store = new PgVector({
       connectionString: envs.POSTGRES_CONNECTION_STRING,
@@ -49,9 +44,13 @@ export class RAGSectionProcessor {
     this.dimension = envs.TEXT_EMBEDDING_MODEL_DIM;
   }
 
-  public getChunks(): Chunk[] {
-    return this.chunks;
+  async add(raw: string, documentName: string, nodeSet: string[] = [], datasetName: string = 'default') {
+    const segments = splitByArticles(raw);
+    for (const segment of segments) {
+      await this.addSegment(documentName, segment, datasetName, nodeSet);
+    }
   }
+
 
   public async initialize() {
     let batch = await prisma.batch.findFirst({
@@ -75,6 +74,7 @@ export class RAGSectionProcessor {
   }
 
   public async addSegment(
+    documentName: string,
     content: string,
     datasetName: string,
     nodeSet: string[]
@@ -119,14 +119,23 @@ export class RAGSectionProcessor {
         data: {
           id,
           content: content,
+          document: {
+            connectOrCreate: {
+              where: { name: documentName },
+              create: {
+                id: uuidv4(),
+                name: documentName,
+                dataset_name: datasetName,
+                node_set: nodeSet,
+              },
+            },
+          },
           chunks: {
             create: chunks.map((chunk) => ({
               id: chunk.id,
               content: chunk.content
             })),
           },
-          node_set: nodeSet,
-          dataset_name: datasetName,
           batch: this.currentBatch.id
         }
       });
@@ -169,7 +178,9 @@ export class RAGSectionProcessor {
 
     const oldSegments = await prisma.segment.findMany({
       where: {
-        dataset_name: datasetName,
+        document: {
+          dataset_name: datasetName
+        },
         batch: { not: this.currentBatch.id },
       },
       include: {
@@ -207,7 +218,9 @@ export class RAGSectionProcessor {
 
     await prisma.segment.deleteMany({
       where: {
-        dataset_name: datasetName,
+        document: {
+          dataset_name: datasetName
+        },
         batch: { not: this.currentBatch.id },
       },
     });
