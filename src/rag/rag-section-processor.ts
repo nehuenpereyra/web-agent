@@ -156,8 +156,10 @@ export class RAGSectionProcessor {
       await this.store.upsert({
         indexName: this.indexName,
         vectors: embeddings,
-        metadata
+        metadata,
+        ids: chunks.map((chunk) => chunk.id),
       });
+
     }
   }
 
@@ -221,9 +223,11 @@ export class RAGSectionProcessor {
   async getResults({
     query,
     minScore = 0.5,
+    categories
   }: {
     query: string;
     minScore: number;
+    categories?: string[];
   }): Promise<IProcessed[]> {
     const queryEmbedding = await ollama.embeddings({
       model: this.modelName,
@@ -234,6 +238,7 @@ export class RAGSectionProcessor {
       indexName: this.indexName,
       queryVector: queryEmbedding.embedding,
       topK: 20,
+      ...(categories && categories.length > 0 ? { filter: { categories: { $in: categories } } } : {})
     });
 
     const resultsFilter = results.filter((value) => value.score >= minScore);
@@ -242,16 +247,29 @@ export class RAGSectionProcessor {
 
     const segments = await prisma.segment.findMany({
       where: {
-        chunks: {
-          some: {
-            id: { in: ids }
-          }
-        }
+        OR: [
+          {
+            chunks: {
+              some: {
+                id: { in: ids }
+              }
+            }
+          },
+          ...(categories && categories.length > 0
+            ? [{
+              categories: {
+                some: {
+                  name: { in: categories },
+                },
+              },
+            }]
+            : []),
+        ],
       },
       include: {
-        chunks: true
+        chunks: true,
       },
-      distinct: ['id']
+      distinct: ['id'],
     });
 
     const segmentResults = segments.map(segment => {

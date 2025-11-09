@@ -26,6 +26,7 @@ model segment {
   updated_at   DateTime @updatedAt
   batch String
   chunks      chunk[]
+  categories  category[]
 }
 
 model chunk {
@@ -34,6 +35,14 @@ model chunk {
   segment_id  String
   segment     segment  @relation(fields: [segment_id], references: [id], onDelete: Cascade)
 }
+
+model category {
+  id          String   @id
+  name     String
+  segment_id  String
+  segment     segment  @relation(fields: [segment_id], references: [id], onDelete: Cascade)
+}
+
 
 enum batch_status {
   completed

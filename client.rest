@@ -1,0 +1,52 @@
+
+### Obtener información de un país en formato JSON
+POST http://localhost:11434/api/chat
+Content-Type: application/json
+
+{
+  "model": "llama3.2:latest",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Tell me about Canada."
+    }
+  ],
+  "stream": false,
+  "format": {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string" },
+      "capital": { "type": "string" },
+      "languages": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["name", "capital", "languages"]
+  }
+}
+### Clasificación de texto usando zero-shot learning
+POST http://localhost:11434/api/chat
+Content-Type: application/json
+
+{
+  "model": "llama3.2:latest",
+  "messages": [
+    {
+      "role": "user",
+      "content": "test"
+    }
+  ],
+  "stream": false,
+  "format": {
+    "type": "object",
+    "properties": {
+         "resume": { "type": "string" },
+      "categories": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "required": ["resume", "categories"]
+  }
+}

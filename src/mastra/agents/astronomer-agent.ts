@@ -2,6 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { LibSQLStore } from '@mastra/libsql';
 import { webTool } from '@/mastra/tools/web-tool';
+import { webCategoryTool } from '../tools/web-category-tool';
 
 export const astronomerAgent = new Agent({
   name: 'Ialp Agent',
@@ -16,10 +17,10 @@ export const astronomerAgent = new Agent({
       - Siempre priorizar la herramienta webTool y solo enviarle la información necesaria
       - No generar respuestas de más de 1500 caracteres.
       
-      Utiliza la herramienta webTool para obtener datos del ialp (instituto) y sobre datos astronómicos que desconozcas.
+      Utiliza primero la herramienta webCategoryTool y luego si no consigues reponder corectamente cambia a webTool para obtener datos del ialp (instituto) y sobre datos astronómicos que desconozcas.
 `,
   model: 'deepseek/deepseek-chat',
-  tools: { webTool },
+  tools: { webTool, webCategoryTool },
   
   memory: new Memory({
     storage: new LibSQLStore({

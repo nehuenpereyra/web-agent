@@ -33,7 +33,7 @@ const main = async () => {
       .getChunks()
       .map((value) => ({ ...value.metadata, text: value.content }))
   );
-  
+
   
 };
 

@@ -4,10 +4,11 @@ import { PinoLogger } from '@mastra/loggers';
 import { LibSQLStore } from '@mastra/libsql';
 import { astronomerAgent } from './agents/astronomer-agent';
 import { journalistAgent } from '@/mastra/agents/journalist-agent';
+import { categoryDiscoveryAgent } from './agents/category-discovery-agent';
 
 export const mastra = new Mastra({
   workflows: {  },
-  agents: { astronomerAgent, journalistAgent },
+  agents: { astronomerAgent, journalistAgent, categoryDiscoveryAgent },
   storage: new LibSQLStore({
     // stores observability, scores, ... into memory storage, if it needs to persist, change to file:../mastra.db
     url: ":memory:",
