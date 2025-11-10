@@ -18,3 +18,4 @@ src/scraping/data/csv
 
 /prisma/generated
 pgdata
+resumenlatinoamericano_posts.json

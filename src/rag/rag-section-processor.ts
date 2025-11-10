@@ -38,6 +38,7 @@ export class RAGSectionProcessor {
     this.segments = [];
     this.store = new PgVector({
       connectionString: envs.POSTGRES_CONNECTION_STRING,
+      max: 20
     });
     this.indexName = "web_index";
     this.modelName = envs.TEXT_EMBEDDING_MODEL_NAME;
@@ -304,4 +305,27 @@ export class RAGSectionProcessor {
     logger.info(`Using batch ID: ${this.currentBatch.id}`);
   }
 
+  async close() {
+    try {
+      // ✅ Desconecta con timeout
+      await Promise.race([
+        this.store.disconnect(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout disconnecting store')), 5000)
+        )
+      ]);
+    } catch (e) {
+      console.warn('⚠️ Error al cerrar store:', e);
+    }
+
+    try {
+      await prisma.$disconnect();
+    } catch (e) {
+      console.warn('⚠️ Error al desconectar Prisma:', e);
+    }
+
+    // ✅ Limpia referencias
+    this.segments = [];
+    (this.store as any) = null;
+  }
 }
