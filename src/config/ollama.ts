@@ -1,54 +1,59 @@
+import axios from "axios";
 import { envs } from "@/config/envs";
-import { execSync } from "child_process";
 
-function setupOllama() {
-  const modelsList = [
-    /*
-    "nomic-embed-text",
-    "paraphrase-multilingual:latest",
-    "embeddinggemma:latest"
-    */
-   envs.TEXT_EMBEDDING_MODEL_NAME
-  ];
+const OLLAMA_URL = "http://localhost:11434";
+
+// Cliente Axios con configuración base
+const ollama = axios.create({
+  baseURL: OLLAMA_URL,
+  headers: {
+    "Content-Type": "application/json",
+  },
+  timeout: 30000,
+});
+
+async function setupOllama() {
+  const modelName = envs.TEXT_EMBEDDING_MODEL_NAME;
+
   try {
-    console.log("🔍 Verificando instalación de Ollama...");
-    
-    // Verificar si Ollama está instalado
-    execSync("ollama --version", { stdio: "pipe" });
-    console.log("✅ Ollama está instalado");
+    console.log("🔍 Verificando si Ollama responde en el puerto 11434...");
 
-    modelsList.forEach((modelName) => {
-      // Descargar el modelo si no existe
-      console.log(`📥 Verificando modelo ${modelName}...`);
-      try {
-        const models = execSync("ollama list", { encoding: "utf8" });
-        if (!models.includes(modelName)) {
-          console.log(`⬇️  Descargando modelo ${modelName}...`);
-          execSync(`ollama pull ${modelName}`, { stdio: "inherit" });
-          console.log("✅ Modelo descargado correctamente");
-        } else {
-          console.log("✅ Modelo ya está descargado");
-        }
-      } catch (error) {
-        console.log("🚀 Iniciando servicio Ollama...");
-        // En producción, deberías manejar esto como un servicio
-        console.log("💡 Ejecuta en otra terminal: ollama serve");
-        console.log("💡 Luego ejecuta: ollama pull nomic-embed-text");
-      }
-    });
-  } catch (error) {
-    console.log(`
-      ❌ Ollama no está instalado.
-      
-      📥 Por favor instala Ollama primero:
-      
-      macOS: brew install ollama
-      Linux: curl -fsSL https://ollama.ai/install.sh | sh
-      Windows: Descarga desde https://ollama.ai/download
-      
-      Luego ejecuta:
-      ollama pull nomic-embed-text
-    `);
+    // Verificar conexión
+    await ollama.get("/api/tags");
+    console.log("✅ Ollama está accesible");
+
+    console.log(`📥 Verificando modelo ${modelName}...`);
+
+    // Obtener lista de modelos
+    const { data: tags } = await ollama.get("/api/tags");
+
+    const exists = tags.models.some((m: any) => m.name === modelName);
+
+    if (!exists) {
+      console.log(`⬇️  Modelo ${modelName} no encontrado. Descargando...`);
+
+      // API /api/pull
+      await ollama.post("/api/pull", { name: modelName });
+
+      console.log("✅ Modelo descargado correctamente");
+    } else {
+      console.log("✅ Modelo ya está instalado");
+    }
+
+  } catch (err: any) {
+    console.error(`
+❌ No se pudo conectar a Ollama en http://localhost:11434
+
+Detalles: ${err.message}
+
+Por favor verifica:
+
+- ¿El contenedor "ollama" está corriendo?
+- ¿El puerto 11434 está expuesto?
+- ¿Tu contenedor "app" usa network_mode: host?
+- ¿Podes acceder desde el host con "curl localhost:11434/api/tags"?
+
+`);
     process.exit(1);
   }
 }

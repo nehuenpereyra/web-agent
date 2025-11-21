@@ -1,0 +1,8 @@
+{
+  "name": "Node 24 Global",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "remoteUser": "node",
+  "workspaceFolder": "/workspace",
+  "postCreateCommand": "pnpm config set store-dir /home/node/.pnpm-store"
+}

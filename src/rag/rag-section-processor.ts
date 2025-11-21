@@ -1,5 +1,5 @@
 import { PgVector } from "@mastra/pg";
-import ollama from "ollama";
+import axios from "axios";
 
 import { splitTextSmart } from "../utils/split-text-smart";
 import { envs } from "@/config/envs";
@@ -9,6 +9,13 @@ import { generateId } from "@/utils/generate-chunk-id";
 import { v4 as uuidv4 } from 'uuid'
 import { batch } from "@/prisma/generated";
 import { splitByArticles } from "@/scraping/formatters/html-formatter";
+import { splitBySeparator } from "@/scraping/formatters/text-separator-formatter";
+
+const ollama = axios.create({
+  baseURL: "http://localhost:11434",
+  headers: { "Content-Type": "application/json" },
+  timeout: 60000,
+});
 
 export interface IProcessed {
   text: string;
@@ -45,8 +52,8 @@ export class RAGSectionProcessor {
     this.dimension = envs.TEXT_EMBEDDING_MODEL_DIM;
   }
 
-  async add(raw: string, documentName: string, nodeSet: string[] = [], datasetName: string = 'default') {
-    const segments = splitByArticles(raw);
+  async add(raw: string, documentName: string, type: 'html' | 'text', nodeSet: string[] = [], datasetName: string = 'default') {
+    const segments = type === 'html' ? splitByArticles(raw) : splitBySeparator(raw);
     for (const segment of segments) {
       await this.addSegment(documentName, segment, datasetName, nodeSet);
     }
@@ -144,11 +151,12 @@ export class RAGSectionProcessor {
       const embeddings = [];
       for (const chunk of chunks) {
         try {
-          const response = await ollama.embeddings({
+          const response = await ollama.post("/api/embeddings", {
             model: this.modelName,
             prompt: chunk.content,
           });
-          embeddings.push(response.embedding);
+
+          embeddings.push(response.data.embedding);
         } catch (error) {
           console.error(`Error generating embedding for chunk: ${error}`);
           throw error;
@@ -243,59 +251,66 @@ export class RAGSectionProcessor {
     minScore: number;
     categories?: string[];
   }): Promise<IProcessed[]> {
-    const queryEmbedding = await ollama.embeddings({
-      model: this.modelName,
-      prompt: query,
-    });
+    try {
+      const { data } = await ollama.post("/api/embeddings", {
+        model: this.modelName,
+        prompt: query,
+      });
 
-    const results = await this.store.query({
-      indexName: this.indexName,
-      queryVector: queryEmbedding.embedding,
-      topK: 20,
-      ...(categories && categories.length > 0 ? { filter: { categories: { $in: categories } } } : {})
-    });
+      const queryVector = data.embedding;
 
-    const resultsFilter = results.filter((value) => value.score >= minScore);
-    const ids = resultsFilter.map(result => result.metadata?.id);
-    const scoreDict = Object.fromEntries(resultsFilter.map(({ metadata, score }) => [metadata?.id, score]));
+      const results = await this.store.query({
+        indexName: this.indexName,
+        queryVector,
+        topK: 20,
+        ...(categories && categories.length > 0 ? { filter: { categories: { $in: categories } } } : {})
+      });
 
-    const segments = await prisma.segment.findMany({
-      where: {
-        OR: [
-          {
-            chunks: {
-              some: {
-                id: { in: ids }
-              }
-            }
-          },
-          ...(categories && categories.length > 0
-            ? [{
-              categories: {
+      const resultsFilter = results.filter((value) => value.score >= minScore);
+      const ids = resultsFilter.map(result => result.metadata?.id);
+      const scoreDict = Object.fromEntries(resultsFilter.map(({ metadata, score }) => [metadata?.id, score]));
+
+      const segments = await prisma.segment.findMany({
+        where: {
+          OR: [
+            {
+              chunks: {
                 some: {
-                  name: { in: categories },
+                  id: { in: ids }
+                }
+              }
+            },
+            ...(categories && categories.length > 0
+              ? [{
+                categories: {
+                  some: {
+                    name: { in: categories },
+                  },
                 },
-              },
-            }]
-            : []),
-        ],
-      },
-      include: {
-        chunks: true,
-      },
-      distinct: ['id'],
-    });
+              }]
+              : []),
+          ],
+        },
+        include: {
+          chunks: true,
+        },
+        distinct: ['id'],
+      });
 
-    const segmentResults = segments.map(segment => {
-      const maxScore = Math.max(
-        ...segment.chunks.map(chunk => scoreDict[chunk.id] ?? 0)
-      );
-      return { text: segment.content, score: maxScore };
-    })
+      const segmentResults = segments.map(segment => {
+        const maxScore = Math.max(
+          ...segment.chunks.map(chunk => scoreDict[chunk.id] ?? 0)
+        );
+        return { text: segment.content, score: maxScore };
+      })
 
-    const sortSegmentResults = segmentResults.sort((a, b) => b.score - a.score);
+      const sortSegmentResults = segmentResults.sort((a, b) => b.score - a.score);
 
-    return sortSegmentResults;
+      return sortSegmentResults;
+    } catch (error) {
+      console.error("Error in getResults:", error);
+      throw error;
+    }
   }
   async info() {
     logger.info(`Text embedding model: ${this.modelName}`);

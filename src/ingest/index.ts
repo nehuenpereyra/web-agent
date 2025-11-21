@@ -15,7 +15,7 @@ const main = async () => {
   await ragSectionProcessor.initialize()
 
   for (const page of scraper.getHtmlPages()) {
-    await ragSectionProcessor.add(page.html, page.url, [slugToTitle(page.url)], 'ialp_web',);
+    await ragSectionProcessor.add(page.html, page.url, 'html' ,[slugToTitle(page.url)], 'ialp_web',);
   }
 
   await ragSectionProcessor.clearSegments('ialp_web');

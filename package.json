@@ -10,6 +10,7 @@
     "build": "mastra build",
     "start": "mastra start",
     "ingest": "tsx src/ingest/index.ts",
+    "ingest:text": "tsx src/ingest/text.ts",
     "save:html": "tsx src/scraping/save/save-html.ts",
     "save:text": "tsx src/scraping/save/save-text.ts",
     "setup:ollama": "tsx src/config/ollama.ts",
